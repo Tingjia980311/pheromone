@@ -57,13 +57,6 @@ message Argument {
   string data_address = 3;
 }
 
-message ArgResp {
-  bytes body = 1;
-
-  string key = 2;
-
-  int32 keylen = 3;
-}
 // // A list of Values that represents the arguments for a particular function
 // // call.
 // message Arguments {

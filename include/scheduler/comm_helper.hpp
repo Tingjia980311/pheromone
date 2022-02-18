@@ -605,15 +605,21 @@ class CommHelper : public CommHelperInterface {
 
       if (data_info_pair.second > 0){
         // deserialize string to repeated int for sending data
-        ArgResp data_resp;
-        data_resp.set_key(key);
-        data_resp.set_keylen(static_cast<int>(key_len));
-        string obj_body(data_info_pair.first, data_info_pair.second);
-        data_resp.set_body(obj_body);
+        auto msg_len = key_len + data_info_pair.second + 1;
+        zmq::message_t msg(msg_len);
+        memcpy(msg.data(), msg_head.c_str(), key_len + 1);
+        memcpy(static_cast<char*>(msg.data()) + key_len + 1, data_info_pair.first, data_info_pair.second);
+
+        // ArgResp data_resp;
+        // data_resp.set_key(key);
+        // data_resp.set_keylen(static_cast<int>(key_len));
+        // string obj_body(data_info_pair.first, data_info_pair.second);
+        // data_resp.set_body(obj_body);
         
         auto send_stamp = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-        send_request(data_resp,  socket_cache_[resp_address]);
+        socket_cache_[resp_address].send(msg);
+        // send_request(data_resp,  socket_cache_[resp_address]);
 
         auto finish_stamp = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
@@ -632,20 +638,29 @@ class CommHelper : public CommHelperInterface {
           std::chrono::system_clock::now().time_since_epoch()).count();
       RecvMsg resp;
 
-      string serialized = kZmqUtil->recv_string(&data_access_client_puller_);
-      ArgResp data_receive;
-      data_receive.ParseFromString(serialized);
+      zmq::message_t message;
+      data_access_client_puller_.recv(&message);
+      auto resp_str = static_cast<char*>(message.data());
+
+      // string serialized = kZmqUtil->recv_string(&data_access_client_puller_);
+      // ArgResp data_receive;
+      // data_receive.ParseFromString(serialized);
       resp.msg_type_ = RecvMsgType::DataResp;
-      auto key_len = static_cast<uint8_t>(data_receive.keylen());
-      string key = data_receive.key();
+
+      auto key_len = static_cast<uint8_t>(resp_str[0]);
+      string key(resp_str + 1, key_len);
+      // auto key_len = static_cast<uint8_t>(data_receive.keylen());
+      // string key = data_receive.key();
 
       auto parse_stamp = std::chrono::duration_cast<std::chrono::microseconds>(
           std::chrono::system_clock::now().time_since_epoch()).count();
 
       resp.data_key_ = key;
-      string body{data_receive.body()};
-      resp.data_size_ = body.length();
-      copy_func_(key, body.c_str(), resp.data_size_);
+      resp.data_size_ = message.size() - key_len - 1;
+      copy_func_(key, resp_str + key_len + 1, resp.data_size_);
+      // string body{data_receive.body()};
+      // resp.data_size_ = body.length();
+      // copy_func_(key, body.c_str(), resp.data_size_);
       comm_resps.push_back(resp);
 
       auto data_copy_stamp = std::chrono::duration_cast<std::chrono::microseconds>(
