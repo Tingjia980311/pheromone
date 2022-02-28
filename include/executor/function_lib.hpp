@@ -34,7 +34,7 @@ class EpheObjectImpl : public EpheObject {
       // }
       shm_id_ = 0;
       // value_ = ipc::shm::get_mem(shm_id_, nullptr);
-      value_ = static_cast<void *> (new char[size_]);
+      value_ = static_cast<void *> (new char[size_ + 1]);
       target_func_ = "";
     }
 

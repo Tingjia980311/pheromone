@@ -15,9 +15,13 @@ extern "C" {
         char *data_ptr = (arg_values[0]);
 
         std::string data_size = std::to_string(std::strlen(data_ptr));
-        auto ephe_obj = library->create_object(data_size.length());
+        auto ephe_obj = library->create_object("output", "datasize", data_size.length() + 1);
         auto val = static_cast<char *>(ephe_obj->get_value());
+       
+
         memcpy(val, data_size.c_str(), data_size.length());
+        val[data_size.length()] = '\0';
+        
         library->send_object(ephe_obj, true);
 
         std::cout << "Read function success. start: " << func_start_t << ", size: " << std::strlen(data_ptr) << std::endl;

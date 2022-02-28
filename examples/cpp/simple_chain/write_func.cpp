@@ -14,7 +14,7 @@ extern "C" {
         std::string size_str(arg_values[0]);
         int size = stoi(size_str);
 
-        auto ephe_obj = library->create_object(size);
+        auto ephe_obj = library->create_object(size + 1);
         auto val = static_cast<char *>(ephe_obj->get_value());
         // write data
         memset(val, '1', size - 1);

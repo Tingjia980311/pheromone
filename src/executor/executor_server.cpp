@@ -273,6 +273,7 @@ void run(Address ip, unsigned thread_id) {
       for(auto arg: req.args()) {
         char * arg_v = new char[arg.size() + 1];
         std::copy(arg.begin(), arg.end(), arg_v);
+        arg_v[arg.size()] = '\0';
         arg_values[i++] = arg_v;
         static_cast<UserLibrary*>(user_lib)->add_arg_size(arg.size() + 1);
       }

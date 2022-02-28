@@ -15,7 +15,7 @@ app_name = 'func-chain'
 dependency = (['write_func'], ['read_func'], DIRECT)
 client.register_app(app_name, ['write_func', 'read_func'], [dependency])
 
-res = client.call_app(app_name, [('write_func', [100])], synchronous=True)
+res = client.call_app(app_name, [('write_func', [10000])], synchronous=True)
 
 print(res)
 

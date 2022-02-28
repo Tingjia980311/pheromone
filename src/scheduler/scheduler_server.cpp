@@ -160,24 +160,25 @@ void schedule_func_call(logger log, CommHelperInterface *helper, map<uint8_t, ui
     // }
 
     helper->send_func_call_to_executor(resp_address, func_name, func_args, executor_id);
+    log->info("sent data size is: {}", strlen(func_args[0].c_str()));
 
     
-    string resp;
-    resp.push_back(1);
-    // arg_flag. 0:actual value; 1:key value; 2:need both key name and key value
-    resp.push_back(static_cast<uint8_t>(arg_flag + 1));
-    if (resp_address.empty()) {
-      resp.push_back(1);
-    }
-    else{
-      resp.push_back(2);
-      resp += resp_address + "|";
-    }
-    string func_args_string(func_name);
-    for (int i = 0; i < func_args.size(); i++){
-      func_args_string = func_args_string + "|" + func_args[i];
-    }
-    resp += func_args_string;
+    // string resp;
+    // resp.push_back(1);
+    // // arg_flag. 0:actual value; 1:key value; 2:need both key name and key value
+    // resp.push_back(static_cast<uint8_t>(arg_flag + 1));
+    // if (resp_address.empty()) {
+    //   resp.push_back(1);
+    // }
+    // else{
+    //   resp.push_back(2);
+    //   resp += resp_address + "|";
+    // }
+    // string func_args_string(func_name);
+    // for (int i = 0; i < func_args.size(); i++){
+    //   func_args_string = func_args_string + "|" + func_args[i];
+    // }
+    // resp += func_args_string;
     
     auto sched_time = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
@@ -678,9 +679,10 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
 
       } else if (comm_resp.msg_type_ == RecvMsgType::SendData) {
         if (comm_resp.option_ == 2) {
-          log->info ("sent data is: {}", string(comm_resp.data_));
+          // log->info ("sent data is: {}", string(comm_resp.data_));
           key_val_map[comm_resp.obj_name_] = comm_resp.data_;
-          key_len_map[comm_resp.obj_name_] = key_val_map[comm_resp.obj_name_].size();
+          key_len_map[comm_resp.obj_name_] = strlen(comm_resp.data_.c_str());
+          log->info ("sent data size is: {}", key_len_map[comm_resp.obj_name_]);
           string app_name = func_app_map[comm_resp.src_function_];
 
           if (app_info_map[app_name].direct_deps_.find(comm_resp.src_function_) != app_info_map[app_name].direct_deps_.end()) {
@@ -711,16 +713,19 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
                         != app_info_map[app_name].direct_deps_[comm_resp.src_function_].end()) {
               schedule_func_call(log, helper, executor_status_map, function_executor_map, comm_resp.resp_address_, app_name, comm_resp.tgt_function_, func_args, arg_flag);
             }
-          } else if (bucket != bucketNameDirectInvoc) {
+          } else if (comm_resp.bucket_ != bucketNameDirectInvoc) {
             string session = "";
             BucketKey bucket_key(comm_resp.bucket_, comm_resp.key_, session);
-            auto active_triggers = check_trigger(log, bucket_key, bucket_key.resp_address_, helper, bucket_triggers_map, function_executor_map, executor_status_map, bucket_app_map);
-            helper->notify_put(bucket_key, active_triggers, comm_resp.resp_address_, key_val_map[obj_name]);
+            auto active_triggers = check_trigger(log, bucket_key, comm_resp.resp_address_, helper, bucket_triggers_map, function_executor_map, executor_status_map, bucket_app_map);
+            helper->notify_put(bucket_key, active_triggers, comm_resp.resp_address_, key_val_map[comm_resp.obj_name_]);
             call_id += active_triggers.size();
           }
         } else if (comm_resp.option_ == 3) {
-          string output_data = comm_resp.data_;
-          
+          // TODO: to anna
+        } else if (comm_resp.option_ == 4) {
+          string output_data;
+          output_data = comm_resp.data_;
+          helper->client_response(comm_resp.resp_address_, func_app_map[comm_resp.src_function_], output_data);
         }
       }
     }

@@ -703,7 +703,7 @@ class CommHelper : public CommHelperInterface {
       zmq::message_t message;
       send_data_puller_.recv(&message);
       auto req = static_cast<char*>(message.data());
-      log_->info("Receive send data request: {}", req);
+      // log_->info("Receive send data request: {}", req);
 
       auto req_id = static_cast<uint8_t>(req[2]);
       auto empty_resp_address = static_cast<uint8_t>(req[3]);
