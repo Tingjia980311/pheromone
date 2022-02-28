@@ -32,6 +32,9 @@ const unsigned updateStatusHandlerPort = 7750;
 const unsigned bucketQueryPort = 8150;
 const unsigned bucketUpdatePort = 8250;
 
+const unsigned ExecutorStatusPort = 8500;
+
+const unsigned SendDataPort = 8600;
 class KVSThread {
   Address ip_;
   Address ip_base_;

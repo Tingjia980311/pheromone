@@ -10,6 +10,8 @@
 #include "libipc/shm.h"
 #include "capo/random.hpp"
 #include <dlfcn.h>
+#include "operation.pb.h"
+
 
 #include "function_lib.hpp"
 #include "yaml-cpp/yaml.h"
@@ -20,6 +22,28 @@ std::atomic<bool> is_quit__{ false };
 unsigned ExecutorTimerThreshold = 1000; // every second
 unsigned RecvWaitTm;
 string funcDir;
+
+
+ZmqUtil zmq_util;
+ZmqUtilInterface *kZmqUtil = &zmq_util;
+// zmq::context_t context(1);
+
+inline bool send_no_block_msg(zmq::socket_t* socket, zmq::message_t& message){
+  try{
+    socket->send(message, ZMQ_DONTWAIT);
+    return true;
+  }
+  catch(std::exception& e){
+    // std::cout << "Queue this message when error occurs " << e.what() << std::endl;
+    return false;
+  }
+  }
+
+inline bool send_no_block_msg(zmq::socket_t* socket, const string& s){
+  zmq::message_t msg(s.size());
+  memcpy(msg.data(), s.c_str(), s.size());
+  return send_no_block_msg(socket, msg);
+}
 
 bool load_function(logger log, string &func_name, map<string, CppFunction> &name_func_map){
     auto start_t = std::chrono::system_clock::now();
@@ -50,21 +74,31 @@ bool load_function(logger log, string &func_name, map<string, CppFunction> &name
     return true;
 }
 
-inline void update_status(unsigned thread_id, bool busy_flag){
-  string req;
-  req.push_back(static_cast<uint8_t>(thread_id + 1)); // we add 1 to avoid \0 in string
-  req.push_back(busy_flag ? 6 : 7); // 6 busy ; 7 available
+inline void update_status(unsigned thread_id, bool busy_flag, SocketCache & socket_cache_){
+  // string req;
+  // req.push_back(static_cast<uint8_t>(thread_id + 1)); // we add 1 to avoid \0 in string
+  // req.push_back(busy_flag ? 6 : 7); // 6 busy ; 7 available
 
-  while (!shared_chan.send(req)) {
-      shared_chan.wait_for_recv(1);
-  }
+  // while (!shared_chan.send(req)) {
+  //     shared_chan.wait_for_recv(1);
+  // }
+
+  ExecutorStatusMessage status_req;
+  status_req.set_thread_id(static_cast<uint32_t>(thread_id));
+  status_req.set_status (busy_flag? 6: 7);
+  string serialized;
+  status_req.SerializeToString(&serialized);
+  send_no_block_msg(&socket_cache_["tcp://127.0.0.1:8500"], serialized);
 }
+
 
 void run(Address ip, unsigned thread_id) {
   string log_file = "log_executor_" + std::to_string(thread_id) + ".txt";
   string log_name = "log_executor_" + std::to_string(thread_id);
   auto log = spdlog::basic_logger_mt(log_name, log_file, true);
   log->flush_on(spdlog::level::info);
+
+  // SocketCache socket_cache_(&context, ZMQ_PUSH);
 
   UserLibraryInterface *user_lib = new UserLibrary(ip, thread_id);
   map<string, CppFunction> name_func_map;
@@ -78,6 +112,22 @@ void run(Address ip, unsigned thread_id) {
   auto report_start = std::chrono::system_clock::now();
   auto report_end = std::chrono::system_clock::now();
 
+  zmq::socket_t func_call_puller(context, ZMQ_PULL);
+  func_call_puller.bind("tcp://*:" + std::to_string(thread_id + 8550));
+
+  vector<zmq::pollitem_t> pollitems = {
+    {static_cast<void *>(func_call_puller), 0, ZMQ_POLLIN, 0}
+  };
+  
+  // string serialized;
+  // UpdateStatusMessage msg;
+  // msg.set_ip("0");
+  // msg.set_avail_executors(0);
+  // msg.add_functions("empty");
+  // msg.SerializeToString(&serialized);
+  // log->info("send zmq msg to scheduler");
+  // send_no_block_msg(&socket_cache_["tcp://127.0.0.1:9000"], serialized); 
+
   while (true){
     auto dd = local_chan->recv(RecvWaitTm);
     auto str = static_cast<char*>(dd.data());
@@ -86,7 +136,7 @@ void run(Address ip, unsigned thread_id) {
       // function call
       if (str[0] == 1){
         auto recv_stamp = std::chrono::system_clock::now();
-        update_status(thread_id, true);
+        update_status(thread_id, true, socket_cache_);
 
         uint8_t arg_flag = str[1] - 1;
         uint8_t resp_address_flag = str[2];
@@ -106,7 +156,7 @@ void run(Address ip, unsigned thread_id) {
           // read .so from shared memory dir
           if(!load_function(log, func_name, name_func_map)){
             log->error("Fail to execute function {} due to load error", func_name);
-            update_status(thread_id, false);
+            update_status(thread_id, false, socket_cache_);
             continue;
           }
         }
@@ -162,7 +212,7 @@ void run(Address ip, unsigned thread_id) {
           }
           else{
             log->error("Function {} cannot parse the shared memory args", func_name);
-            update_status(thread_id, false);
+            update_status(thread_id, false, socket_cache_);
             continue;
           }
         }
@@ -181,19 +231,88 @@ void run(Address ip, unsigned thread_id) {
         auto execute_stamp = std::chrono::system_clock::now();
         static_cast<UserLibrary*>(user_lib)->clear_session();
 
-        update_status(thread_id, false);
+        update_status(thread_id, false, socket_cache_);
 
         auto execute_time = std::chrono::duration_cast<std::chrono::microseconds>(execute_stamp.time_since_epoch()).count();
         log->info("Executed {} at: {}", func_name, execute_time);
 
       }
     }
+
+    kZmqUtil->poll(0, &pollitems);
+    if (pollitems[0].revents & ZMQ_POLLIN) {
+      auto recv_stamp = std::chrono::system_clock::now();
+      string serialized = kZmqUtil->recv_string(&func_call_puller);
+      log->info("receive function call request");
+      FunctionCallToExecutor req;
+      req.ParseFromString(serialized);
+      // update_status(thread_id, true, socket_cache_);
+      string resp_address = req.resp_address();
+      string func_name = req.func_name();
+      for(auto arg : req.args()) {
+        log->info("arg is {}", arg);
+      }
+
+      static_cast<UserLibrary*>(user_lib)->set_function_name(func_name);
+      static_cast<UserLibrary*>(user_lib)->set_resp_address(resp_address);
+
+      if (name_func_map.find(func_name) == name_func_map.end()){
+        // read .so from shared memory dir
+        if(!load_function(log, func_name, name_func_map)){
+          log->error("Fail to execute function {} due to load error", func_name);
+          update_status(thread_id, false, socket_cache_);
+          continue;
+        }
+      }
+
+
+      int arg_size = req.args().size();
+      char ** arg_values;
+      arg_values = new char*[req.args().size()];
+      int i = 0;
+      for(auto arg: req.args()) {
+        char * arg_v = new char[arg.size() + 1];
+        std::copy(arg.begin(), arg.end(), arg_v);
+        arg_values[i++] = arg_v;
+        static_cast<UserLibrary*>(user_lib)->add_arg_size(arg.size() + 1);
+      }
+
+      auto recv_time = std::chrono::duration_cast<std::chrono::microseconds>(recv_stamp.time_since_epoch()).count();
+      auto parse_stamp = std::chrono::system_clock::now();
+      auto parse_time = std::chrono::duration_cast<std::chrono::microseconds>(parse_stamp.time_since_epoch()).count();
+
+      log->info("Executing {} arg_size: {}. recv: {}, parse: {}", func_name, arg_size, recv_time, parse_time);
+
+      int exit_signal = name_func_map[func_name](user_lib, arg_size, arg_values);
+      if (exit_signal != 0){
+        std::cerr << "Function " << func_name << " exits with error " << exit_signal << std::endl;
+        log->warn("Function {} exits with error {}", func_name, exit_signal);
+      }
+      auto execute_stamp = std::chrono::system_clock::now();
+      static_cast<UserLibrary*>(user_lib)->clear_session();
+
+      update_status(thread_id, false, socket_cache_);
+
+      auto execute_time = std::chrono::duration_cast<std::chrono::microseconds>(execute_stamp.time_since_epoch()).count();
+      log->info("Executed {} at: {}", func_name, execute_time);
+
+
+
+
+  
+
+
+      
+    }
+
+
+
     report_end = std::chrono::system_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(report_end - report_start).count();
 
     if (duration >= ExecutorTimerThreshold) {
       report_start = std::chrono::system_clock::now();
-      update_status(thread_id, false);      
+      update_status(thread_id, false, socket_cache_);      
       // log->info("Executer {} report.", thread_id);
     }
    

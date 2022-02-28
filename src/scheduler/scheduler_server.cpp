@@ -152,6 +152,16 @@ void schedule_func_call(logger log, CommHelperInterface *helper, map<uint8_t, ui
     }
 
     // 1 means function call
+    // FunctionCallToExecutor call;
+    // call.set_resp_address (resp_address);
+    // call.set_func_name (func_name);
+    // for (int i = 0; i < func_args.size(); i++) {
+    //   call.add_args(func_args[i]);
+    // }
+
+    helper->send_func_call_to_executor(resp_address, func_name, func_args, executor_id);
+
+    
     string resp;
     resp.push_back(1);
     // arg_flag. 0:actual value; 1:key value; 2:need both key name and key value
@@ -173,7 +183,7 @@ void schedule_func_call(logger log, CommHelperInterface *helper, map<uint8_t, ui
         std::chrono::system_clock::now().time_since_epoch()).count();
 
     log->info("Schedule function {} with arg_flag {} to executor {}. sched_time: {}", func_name, arg_flag, executor_id, sched_time);
-    send_to_executer(executor_chans_map[executor_id], resp);
+    // send_to_executer(executor_chans_map[executor_id], resp);
     executor_status_map[executor_id] = 2;
   }
   else{
@@ -652,6 +662,65 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
             send_to_executer(executor_chans_map[inflight_put_req.executor_id_], resp);
           }
           key_ksv_put_map.erase(comm_resp.data_key_);
+        }
+      } else if (comm_resp.msg_type_ == RecvMsgType::ExecutorStatus) {
+        int executor_id = comm_resp.executor_id_;
+        if (comm_resp.busy_flag == 6) {
+          executor_status_map[executor_id] = 3;
+        } else {
+          if (executor_status_map[executor_id] == 0 || executor_status_map[executor_id] == 2){
+            executor_status_map[executor_id] = 0;
+          }
+          else{
+            executor_status_map[executor_id] = 1;
+          }
+        }
+
+      } else if (comm_resp.msg_type_ == RecvMsgType::SendData) {
+        if (comm_resp.option_ == 2) {
+          log->info ("sent data is: {}", string(comm_resp.data_));
+          key_val_map[comm_resp.obj_name_] = comm_resp.data_;
+          key_len_map[comm_resp.obj_name_] = key_val_map[comm_resp.obj_name_].size();
+          string app_name = func_app_map[comm_resp.src_function_];
+
+          if (app_info_map[app_name].direct_deps_.find(comm_resp.src_function_) != app_info_map[app_name].direct_deps_.end()) {
+            vector<string> func_args;
+            int arg_flag = 0;
+            func_args.push_back(key_val_map[comm_resp.obj_name_]);
+            if (comm_resp.tgt_function_.empty()) {
+              vector<string> target_funcs;
+              for (auto target_dep: app_info_map[app_name].direct_deps_[comm_resp.src_function_])
+                target_funcs.push_back(target_dep);
+              
+              auto avail_executors = get_avail_executor_num(executor_status_map);
+              if (target_funcs.size() > avail_executors) {
+                vector<string> local_funcs(target_funcs.begin(), target_funcs.begin() + avail_executors);
+                vector<string> remote_funcs(target_funcs.begin() + avail_executors, target_funcs.end());
+                for (auto &func : local_funcs) 
+                  schedule_func_call(log, helper, executor_status_map, function_executor_map, comm_resp.resp_address_, app_name, func, func_args, arg_flag);
+                if(!rejectExtraReq) {
+                  vector<vector<string>> func_args_vec;
+                  for (int i = 0; i < remote_funcs.size(); i++) func_args_vec.push_back(func_args);
+                  forward_call_via_helper(helper, comm_resp.resp_address_, app_name, remote_funcs, func_args_vec, arg_flag);
+                } 
+              } else {
+                for (auto & func: target_funcs) 
+                  schedule_func_call(log, helper, executor_status_map, function_executor_map, comm_resp.resp_address_, app_name, func, func_args, arg_flag);
+              }
+            } else if (app_info_map[app_name].direct_deps_[comm_resp.src_function_].find(comm_resp.tgt_function_) 
+                        != app_info_map[app_name].direct_deps_[comm_resp.src_function_].end()) {
+              schedule_func_call(log, helper, executor_status_map, function_executor_map, comm_resp.resp_address_, app_name, comm_resp.tgt_function_, func_args, arg_flag);
+            }
+          } else if (bucket != bucketNameDirectInvoc) {
+            string session = "";
+            BucketKey bucket_key(comm_resp.bucket_, comm_resp.key_, session);
+            auto active_triggers = check_trigger(log, bucket_key, bucket_key.resp_address_, helper, bucket_triggers_map, function_executor_map, executor_status_map, bucket_app_map);
+            helper->notify_put(bucket_key, active_triggers, comm_resp.resp_address_, key_val_map[obj_name]);
+            call_id += active_triggers.size();
+          }
+        } else if (comm_resp.option_ == 3) {
+          string output_data = comm_resp.data_;
+          
         }
       }
     }

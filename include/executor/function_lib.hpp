@@ -10,6 +10,8 @@
 #include "cpp_function.hpp"
 
 using shm_chan_t = ipc::chan<ipc::relat::multi, ipc::relat::multi, ipc::trans::unicast>;
+zmq::context_t context(1);
+SocketCache socket_cache_(&context, ZMQ_PUSH);
 
 constexpr char const kvs_name__  [] = "ipc-kvs";
 shm_chan_t shared_chan { kvs_name__, ipc::sender };
@@ -23,14 +25,16 @@ class EpheObjectImpl : public EpheObject {
     EpheObjectImpl(string bucket, string key, size_t size, bool create) {
       obj_name_ = bucket + kDelimiter  + key;
       size_ = size;
-      if (create) {
-        // shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_, ipc::shm::create);
-        shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_);
-      }
-      else{
-        shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_, ipc::shm::open);
-      }
-      value_ = ipc::shm::get_mem(shm_id_, nullptr);
+      // if (create) {
+      //   // shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_, ipc::shm::create);
+      //   shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_);
+      // }
+      // else{
+      //   shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_, ipc::shm::open);
+      // }
+      shm_id_ = 0;
+      // value_ = ipc::shm::get_mem(shm_id_, nullptr);
+      value_ = static_cast<void *> (new char[size_]);
       target_func_ = "";
     }
 
@@ -46,7 +50,7 @@ class EpheObjectImpl : public EpheObject {
     }
 
     ~EpheObjectImpl(){
-      ipc::shm::release(shm_id_);
+      // ipc::shm::release(shm_id_);
     }
 
     void* get_value(){
@@ -83,6 +87,7 @@ class UserLibrary : public UserLibraryInterface {
       chan_id_ = static_cast<uint8_t>(thread_id + 1);
       rid_ = 0;
       object_id_ = 0;
+      
     }
 
     ~UserLibrary() {}
@@ -133,71 +138,32 @@ class UserLibrary : public UserLibraryInterface {
       string req;
       auto req_id = get_request_id();
       req.push_back(chan_id_);
-
       bool wait_res = false;
-      if (output) {
+      if(output) {
         if (to_anna) {
-          // write to remote data store
           req.push_back(3);
           wait_res = true;
-        }
-        else {
-          // directly response to client
+        } else
           req.push_back(4);
-        }
-      }
-      else {
-        // ephemeral data
+      } else 
         req.push_back(2);
-      }
       
       req.push_back(req_id);
       req.push_back(resp_address_.empty() ? 1 : 2);
-      bool data_packing = data->get_size() <= msgDataPackingThreshold;
-      req.push_back(data_packing ? 1 : 2);
       if (!resp_address_.empty()){
         req += resp_address_ + "|";
       }
+
       req += function_ + "|" + static_cast<EpheObjectImpl*>(data)->target_func_ + "|"
                         + static_cast<EpheObjectImpl*>(data)->obj_name_ + "|";
 
-      if (data_packing) {
-        req += string(static_cast<char*>(data->get_value()), data->get_size());
-      }
-      else {
-        req += std::to_string(data->get_size());
-      }
-      // while (!shared_chan.send(req)) {
-      //     shared_chan.wait_for_recv(1);
-      // }
+      req += string(static_cast<char*>(data->get_value()), data->get_size());
+
+      zmq::message_t msg(req.size());
+      memcpy(msg.data(), req.c_str(), req.size() + 1);
+
+      socket_cache_["tcp://127.0.0.1:8600"].send(msg);
       
-      bool send_res = shared_chan.send(req);
-      if (!send_res) {
-        std::cerr << "Send to executer failed.";
-
-        if (!shared_chan.wait_for_recv(1)) {
-            std::cerr << "Wait receiver failed.\n";
-        }
-      }
-
-      if (send_res && wait_res) {
-        auto recv_dd = local_chan->recv(30000); // 30-second timeout
-        auto recv_str = static_cast<char*>(recv_dd.data());
-
-        if (recv_str == nullptr) {
-          std::cout << "Put error: timeout " << std::endl;
-        }
-        if (recv_str[0] != 3) {
-          std::cout << "Put error: incorrect message type " << (uint8_t) recv_str[0] << std::endl;
-        }
-        if (recv_str[1] != req_id) {
-          std::cout << "Put error: request id " << (uint8_t) recv_str[1] << " doesn't match " << req_id << std::endl;
-        }
-
-        if (recv_str[2] != 1) {
-          std::cout << "Put error: kvs error" << std::endl;
-        }
-      }
     }
 
     EpheObject* get_object(string bucket, string key, bool from_ephe_store=true) {

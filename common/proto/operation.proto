@@ -283,6 +283,17 @@ message UpdateStatusMessage {
   repeated string functions = 3;
 }
 
+message ExecutorStatusMessage {
+  uint32 thread_id = 1;
+  uint32 status = 2;
+}
+
+message FunctionCallToExecutor {
+  string resp_address = 1;
+  string func_name = 2;
+  repeated bytes args = 3;
+}
+
 message TriggerEntity {
   string bucket_name = 1;
 
