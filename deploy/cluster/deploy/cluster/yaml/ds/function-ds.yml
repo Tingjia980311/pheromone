@@ -17,10 +17,9 @@ spec:
         role: function
       restartPolicy: Always
       volumes:
-      - emptyDir:
-          medium: Memory
-          sizeLimit: 10G
-        name: cache-volume
+      - name: ipc
+        hostPath:
+          path: /tmp
       hostNetwork: true
       hostIPC: true
       containers:
