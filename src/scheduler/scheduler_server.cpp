@@ -335,10 +335,11 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
 
   while (true){
     // TODO timeout
-    auto dd = shared_chan.recv(0);
-    auto str = static_cast<char*>(dd.data());
-
-    if (str != nullptr) {
+    /*
+     *auto dd = shared_chan.recv(0);
+     * auto str = static_cast<char*>(dd.data());
+     * 
+     * if (str != nullptr) {
       auto recv_stamp = std::chrono::system_clock::now();
 
       // executor address (1 byte) | requst type (1 byte) | request id (1 byte) | metadata len (1 byte)| metadata | optional value
@@ -534,7 +535,8 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
         }
         // helper->update_status(get_avail_executor_num(executor_status_map), function_cache);
       }
-    }
+     * }
+    */
 
     // handle message from comm_helper
     auto comm_resps = helper->try_recv_msg(bucket_triggers_map, app_info_map, func_app_map, bucket_app_map);
@@ -664,7 +666,8 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
           }
           key_ksv_put_map.erase(comm_resp.data_key_);
         }
-      } else if (comm_resp.msg_type_ == RecvMsgType::ExecutorStatus) {
+      } 
+      else if (comm_resp.msg_type_ == RecvMsgType::ExecutorStatus) {
         int executor_id = comm_resp.executor_id_;
         if (comm_resp.busy_flag == 6) {
           executor_status_map[executor_id] = 3;
@@ -677,7 +680,8 @@ void run(CommHelperInterface *helper, Address ip, unsigned thread_id, unsigned e
           }
         }
 
-      } else if (comm_resp.msg_type_ == RecvMsgType::SendData) {
+      } 
+      else if (comm_resp.msg_type_ == RecvMsgType::SendData) {
         if (comm_resp.option_ == 2) {
           // log->info ("sent data is: {}", string(comm_resp.data_));
           key_val_map[comm_resp.obj_name_] = comm_resp.data_;

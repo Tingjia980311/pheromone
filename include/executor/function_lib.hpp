@@ -135,34 +135,27 @@ class UserLibrary : public UserLibraryInterface {
     }
 
     void send_object(EpheObject *data, bool output = false, bool to_anna = false) {
-      string req;
+      SendObject req;
+      req.set_executor_id(chan_id_ - 1);
       auto req_id = get_request_id();
-      req.push_back(chan_id_);
+
       bool wait_res = false;
       if(output) {
         if (to_anna) {
-          req.push_back(3);
+          req.set_ephe_option(3);
           wait_res = true;
         } else
-          req.push_back(4);
+          req.set_ephe_option(4);
       } else 
-        req.push_back(2);
-      
-      req.push_back(req_id);
-      req.push_back(resp_address_.empty() ? 1 : 2);
-      if (!resp_address_.empty()){
-        req += resp_address_ + "|";
-      }
-
-      req += function_ + "|" + static_cast<EpheObjectImpl*>(data)->target_func_ + "|"
-                        + static_cast<EpheObjectImpl*>(data)->obj_name_ + "|";
-
-      req += string(static_cast<char*>(data->get_value()), data->get_size());
-
-      zmq::message_t msg(req.size());
-      memcpy(msg.data(), req.c_str(), req.size() + 1);
-
-      socket_cache_["tcp://127.0.0.1:8600"].send(msg);
+        req.set_ephe_option(2);
+ 
+      req.set_request_id(req_id);
+      req.set_resp_address(resp_address_);
+      req.set_func_name(function_);
+      req.set_target_func(static_cast<EpheObjectImpl*>(data)->target_func_);
+      req.set_object_name(static_cast<EpheObjectImpl*>(data)->obj_name_);
+      req.set_data( string(static_cast<char*>(data->get_value()), data->get_size()) );
+      send_request(req, socket_cache_["ipc:///requests/send_object"]);
       
     }
 

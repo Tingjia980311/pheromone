@@ -149,8 +149,10 @@ class CommHelper : public CommHelperInterface {
     data_access_server_puller_.bind(ut_.data_access_server_bind_address());
     data_access_client_puller_.bind(ut_.data_access_client_bind_address());
     func_exec_puller_.bind(kBindBase + std::to_string(funcExecPort));
-    executor_status_puller_.bind(kBindBase + std::to_string(ExecutorStatusPort));
-    send_data_puller_.bind(kBindBase + std::to_string(SendDataPort));
+    executor_status_puller_.bind("ipc:///requests/update_status");
+    send_data_puller_.bind("ipc:///requests/send_object");
+    // send_data_puller_.bind(kBindBase + std::to_string(SendDataPort));
+    // send_data_puller_.bind(kBindBase + std::to_string(SendDataPort));
 
     std::cout << "Worker puller binded" << std::endl;
 
@@ -407,7 +409,7 @@ class CommHelper : public CommHelperInterface {
       call.add_args(func_args[i]);
     }
 
-    send_request(call, socket_cache_["tcp://127.0.0.1:" + std::to_string(executor_id + 8550)]);
+    send_request(call, socket_cache_["ipc:///requests/func_call_" + std::to_string(executor_id)]);
   }
 
   void get_kvs_async(string &key){
@@ -684,6 +686,7 @@ class CommHelper : public CommHelperInterface {
       log_->info("Data response io_thread 0. key: {}, size: {}, recv: {}, parse: {}, copy: {}.", key, resp.data_size_, data_resp_stamp, parse_stamp, data_copy_stamp);
     }
 
+    // receive status update from executor
     if (zmq_pollitems_[4].revents & ZMQ_POLLIN) {
       
       RecvMsg resp;
@@ -697,29 +700,24 @@ class CommHelper : public CommHelperInterface {
       log_->info("Receive message from executor {} with busy flag {}.", resp.executor_id_, resp.busy_flag);
     }
 
+    // receive send data request from execuor
     if (zmq_pollitems_[5].revents & ZMQ_POLLIN) {
       RecvMsg resp;
 
-      zmq::message_t message;
-      send_data_puller_.recv(&message);
-      auto req = static_cast<char*>(message.data());
-      // log_->info("Receive send data request: {}", req);
-
-      auto req_id = static_cast<uint8_t>(req[2]);
-      auto empty_resp_address = static_cast<uint8_t>(req[3]);
-      auto thread_id = static_cast<uint8_t>(req[0] - 1);
-      
-      string params(req + 4);
+      string serialized = kZmqUtil->recv_string(&send_data_puller_);
+      SendObject req;
+      req.ParseFromString(serialized);
+      auto req_id = req.request_id();
+      auto thread_id = req.executor_id();
+      string resp_address = req.resp_address();
+      string src_function = req.func_name();
+      string tgt_function = req.target_func();
+      string obj_name = req.object_name();
       vector<string> infos;
-      split(params, '|', infos);
-
-      string resp_address = empty_resp_address == 1? emptyString: infos[0];
-      auto src_function = infos[empty_resp_address - 1];
-      auto tgt_function = infos[empty_resp_address];
-
-      auto bucket = infos[empty_resp_address + 1];
-      auto key = infos[empty_resp_address + 2];
-      string obj_name = bucket + kDelimiter + key;
+      split(obj_name, '|', infos);
+      string bucket = infos[0];
+      string key = infos[1];
+      obj_name = bucket + kDelimiter + key;
 
       resp.msg_type_ = RecvMsgType::SendData;
       resp.executor_id_ = thread_id;
@@ -730,8 +728,8 @@ class CommHelper : public CommHelperInterface {
       resp.bucket_ = bucket;
       resp.key_ = key;
       resp.obj_name_ = obj_name;
-      resp.data_ = infos[empty_resp_address + 3];
-      resp.option_ = req[1];
+      resp.data_ = req.data();
+      resp.option_ = req.ephe_option();
       // log_->info ("sent data is: {}", string(infos[empty_resp_address + 3]));
       comm_resps.push_back(resp);
     }

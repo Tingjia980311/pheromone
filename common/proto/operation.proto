@@ -294,6 +294,17 @@ message FunctionCallToExecutor {
   repeated bytes args = 3;
 }
 
+message SendObject {
+  uint32 executor_id = 1;
+  uint32 request_id = 2;
+  uint32 ephe_option = 3;
+  string resp_address = 4;
+  string func_name = 5;
+  string target_func = 6;
+  string object_name = 7;
+  string data = 8;
+}
+
 message TriggerEntity {
   string bucket_name = 1;
 
