@@ -37,15 +37,30 @@ spec:
         - name: ROLE
           value: executor
         volumeMounts:
-        - name: cache-volume
-          mountPath: /dev/shm
+        - name: ipc
+          mountPath: /requests
+      - name: function-2
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1.2G"
+        image: tingjia/pheromone
+        imagePullPolicy: Always
+        env:
+        - name: THREAD_ID
+          value: "1"
+        - name: ROLE
+          value: executor
+        volumeMounts:
+        - name: ipc
+          mountPath: /requests
       - name: local-sched
         image: tingjia/pheromone
         imagePullPolicy: Always
         resources:
           limits:
             cpu: "2"
-            memory: "5G"
+            memory: "10G"
         env:
         - name: COORD_IPS
           value: COORD_IPS_DUMMY
@@ -58,11 +73,11 @@ spec:
         - name: IO_THREADS
           value: "1"
         - name: EXECUTOR_NUM
-          value: "1"
+          value: "2"
         - name: DELAY
           value: "0"
         - name: SHARED
           value: "0"
         volumeMounts:
-        - name: cache-volume
-          mountPath: /dev/shm
+        - name: ipc
+          mountPath: /requests
