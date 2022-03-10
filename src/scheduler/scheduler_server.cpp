@@ -39,7 +39,7 @@ shm_chan_t shared_chan { name__, ipc::receiver };
 map<uint8_t, shm_chan_t*> executor_chans_map;
 std::atomic<bool> is_quit__{ false };
 
-unsigned forwardDataPackingThreshold = 10240; // pack data into request if data size < 10KB 
+unsigned forwardDataPackingThreshold = 1; // pack data into request if data size < 10KB 
 unsigned schedTimerThreshold = 10; // every 100 ms
 unsigned ramSeed = time(NULL);
 string funcDir;
