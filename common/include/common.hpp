@@ -21,7 +21,7 @@ const unsigned kMaxSocketNumber = 10000;
 const string kDelimiter = "|";
 const char kDelimiterChar = '|';
 
-const unsigned msgDataPackingThreshold = 1024; // pack data into notification msg if data size < 1KB 
+const unsigned msgDataPackingThreshold = 1; // pack data into notification msg if data size < 1KB 
 
 const string bucketNameDirectInvoc = "direct_invoc";
 const string emptyString = string();
