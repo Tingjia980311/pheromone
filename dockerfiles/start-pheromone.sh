@@ -102,24 +102,22 @@ elif [[ "$ROLE" = "scheduler" ]]; then
   done
 
 elif [[ "$ROLE" = "executor" ]]; then
-  cd /
-  git clone https://github.com/Tingjia980311/video_experiment.git
-  cd /video_experiment/video_analysis/lib
-  wget https://github.com/Tingjia980311/video_experiment/releases/download/tensorflow_cc.so/libtensorflow_cc.so
-  ln libtensorflow_cc.so libtensorflow_cc.so.2
-  
-  sed -i '$a\/video_experiment/video_analysis/lib/' /etc/ld.so.conf
-  ldconfig
-  
-  cd /video_experiment/video_encoder
-  wget http://archive.ubuntu.com/ubuntu/pool/universe/x/x264/libx264-152_0.152.2854+gite9a5903-2_amd64.deb
-  dpkg -i libx264-152_0.152.2854+gite9a5903-2_amd64.deb
-  rm libx264-152_0.152.2854+gite9a5903-2_amd64.deb
+  echo -e "threads:" | tee -a conf/config.yml
+  echo -e "    coord: ${COORD_THREADS}" | tee -a conf/config.yml
 
-  cd $PHERO_HOME
-  echo -e "ip: $IP" | tee -a conf/config.yml
-  echo -e "thread_id: $THREAD_ID" | tee -a conf/config.yml
+  # echo -e "ip: $IP" | tee -a conf/config.yml
+  # echo -e "thread_id: $THREAD_ID" | tee -a conf/config.yml
   echo -e "func_dir: /dev/shm/" | tee -a conf/config.yml
+  echo -e "user:" | tee -a conf/config.yml
+  echo -e "    ip: $IP" | tee -a conf/config.yml
+  echo -e "    thread_id: $THREAD_ID" | tee -a conf/config.yml
+  echo -e "    routing-elb: $ROUTE_ADDR" >> conf/config.yml
+
+  LST=$(gen_yml_list "$COORD_IPS")
+  echo -e "    coord:" | tee -a conf/config.yml
+  echo -e "$LST" | tee -a conf/config.yml
+
+
 
   if [[ -n "$WAIT" ]]; then
     echo -e "wait: $WAIT" | tee -a conf/config.yml
