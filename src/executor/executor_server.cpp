@@ -10,7 +10,8 @@
 #include "libipc/shm.h"
 #include "capo/random.hpp"
 #include <dlfcn.h>
-
+#include "comm_helper.hpp"
+#include "anna_client/kvs_client.hpp"
 #include "function_lib.hpp"
 #include "yaml-cpp/yaml.h"
 
@@ -50,28 +51,13 @@ bool load_function(logger log, string &func_name, map<string, CppFunction> &name
     return true;
 }
 
-inline void update_status(unsigned thread_id, bool busy_flag){
-  string req;
-  req.push_back(static_cast<uint8_t>(thread_id + 1)); // we add 1 to avoid \0 in string
-  req.push_back(busy_flag ? 6 : 7); // 6 busy ; 7 available
 
-  while (!shared_chan.send(req)) {
-      shared_chan.wait_for_recv(1);
-  }
-}
+void run(CommHelperInterface *helper, Address ip, unsigned thread_id, logger log) {
+  
 
-void run(Address ip, unsigned thread_id) {
-  string log_file = "log_executor_" + std::to_string(thread_id) + ".txt";
-  string log_name = "log_executor_" + std::to_string(thread_id);
-  auto log = spdlog::basic_logger_mt(log_name, log_file, true);
-  log->flush_on(spdlog::level::info);
-
-  UserLibraryInterface *user_lib = new UserLibrary(ip, thread_id);
+  UserLibraryInterface *user_lib = new UserLibrary(ip, thread_id, helper);
   map<string, CppFunction> name_func_map;
 
-  string chan_name = "ipc-" + std::to_string(thread_id);
-  local_chan = new shm_chan_t{chan_name.c_str(), ipc::receiver};
-  
   std::cout << "Running executor...\n";
   log->info("Running executor...");
 
@@ -79,121 +65,83 @@ void run(Address ip, unsigned thread_id) {
   auto report_end = std::chrono::system_clock::now();
 
   while (true){
-    auto dd = local_chan->recv(RecvWaitTm);
-    auto str = static_cast<char*>(dd.data());
-    
-    if (str != nullptr) {
-      // function call
-      if (str[0] == 1){
-        auto recv_stamp = std::chrono::system_clock::now();
-        update_status(thread_id, true);
+    auto comm_resps = helper->try_recv_msg();
 
-        uint8_t arg_flag = str[1] - 1;
-        uint8_t resp_address_flag = str[2];
-
-        string msg(str + 3);
-        vector<string> func_with_args;
-        split(msg, '|', func_with_args);
-
-        string resp_address = resp_address_flag == 1 ? emptyString : func_with_args[0];
-        if (resp_address_flag != 1) func_with_args.erase(func_with_args.begin());
-        string func_name = func_with_args[0];
-        // int func_id = stoi(func_with_args[1]);
-
-        static_cast<UserLibrary*>(user_lib)->set_function_name(func_name);
-        static_cast<UserLibrary*>(user_lib)->set_resp_address(resp_address);
-        if (name_func_map.find(func_name) == name_func_map.end()){
+    for (auto &comm_resp : comm_resps) {
+      if (comm_resp.msg_type_ == RecvMsgType::Call) {
+        for (int i = 0; i < comm_resp.func_name_.size(); i++){
+          helper->update_status(thread_id, true);
+          auto func_name = comm_resp.func_name_[i];
+          auto func_args = comm_resp.func_args_[i];
+          // auto arg_flag = comm_resp.is_func_arg_keys_[i];
+          auto resp_address = comm_resp.resp_address_;
+          static_cast<UserLibrary*>(user_lib)->set_function_name(func_name);
+          static_cast<UserLibrary*>(user_lib)->set_resp_address(resp_address);
+          if (name_func_map.find(func_name) == name_func_map.end()){
           // read .so from shared memory dir
-          if(!load_function(log, func_name, name_func_map)){
-            log->error("Fail to execute function {} due to load error", func_name);
-            update_status(thread_id, false);
-            continue;
+            if(!load_function(log, func_name, name_func_map)){
+              log->error("Fail to execute function {} due to load error", func_name);
+              continue;
+            }
           }
-        }
+          int arg_size;
+          char ** arg_values;
 
-        int arg_size;
-        char ** arg_values;
-        if (arg_flag == 0){
-          // We parse plain args with splitter
-          arg_size = func_with_args.size() - 1;
+          arg_size = comm_resp.func_args_[i].size();
           arg_values = new char*[arg_size];
-          for (int i = 0; i < arg_size; i++){
-            auto index_in_func_args = i + 1;
-            auto arg_size_in_bytes = func_with_args[index_in_func_args].size();
-            char * arg_v = new char[arg_size_in_bytes + 1];
-            std::copy(func_with_args[index_in_func_args].begin(), func_with_args[index_in_func_args].end(), arg_v);
-            arg_v[arg_size_in_bytes] = '\0';
-            arg_values[i] = arg_v;
-            static_cast<UserLibrary*>(user_lib)->add_arg_size(arg_size_in_bytes);
-          }
-        }
-        else {
-          if (func_with_args.size() % 3 == 1){
-            // can be divied by 3, exclude the function name
-            if (arg_flag == 1) {
-              arg_size = func_with_args.size() / 3;
-            }
-            else if (arg_flag == 2) {
-              arg_size = 2 * (func_with_args.size() - 1) / 3;
-            }
-            arg_values = new char*[arg_size];
+          for (int j = 0; j < arg_size; j++){
+            if (comm_resp.func_arg_flags_[i][j] == 0) {
+              auto arg_size_in_bytes = comm_resp.func_args_[i][j].size();
+              char * arg_v = new char[arg_size_in_bytes + 1];
+              std::copy(comm_resp.func_args_[i][j].begin(), comm_resp.func_args_[i][j].end(), arg_v);
+              arg_v[arg_size_in_bytes] = '\0';
+              arg_values[i] = arg_v;
+              static_cast<UserLibrary*>(user_lib)->add_arg_size(arg_size_in_bytes);
+            } else {
+              
+              kvs_clients[0]->get_async(comm_resp.func_args_[i][j]);
+              while(1){
+                auto comm_resps = helper->try_recv_msg();
+                int recv_resp_from_anna = 0;
+                for (auto &comm_resp : comm_resps) {
+                  if (comm_resp.msg_type_ == RecvMsgType::KvsGetResp) {
+                    auto arg_size_in_bytes = comm_resp.data_.size();
+                    char * arg_v = new char[arg_size_in_bytes + 1];
+                    std::copy(comm_resp.data_.begin(), comm_resp.data_.end(), arg_v);
+                    arg_v[arg_size_in_bytes] = '\0';
+                    arg_values[i] = arg_v;
+                    static_cast<UserLibrary*>(user_lib)->add_arg_size(arg_size_in_bytes);
+                    recv_resp_from_anna = 1;
+                    break;
+                  }
+                }
+                if (recv_resp_from_anna) break;
 
-            for (int i = 1; i < func_with_args.size(); i+=3){
-              string key_name = func_with_args[i] + "|" + func_with_args[i + 1];
-              auto shm_obj_size = stoi(func_with_args[i + 2]);
-              auto shm_id = ipc::shm::acquire(key_name.c_str(), shm_obj_size, ipc::shm::open);
-              auto shm_ptr = static_cast<char*>(ipc::shm::get_mem(shm_id, nullptr));
-              if (arg_flag == 1) {
-                arg_values[i/3] = shm_ptr;
-                static_cast<UserLibrary*>(user_lib)->add_arg_size(shm_obj_size);
               }
-              else if (arg_flag == 2) {
-                int index = 2 * (i - 1) / 3;
-                auto arg_size_in_bytes = func_with_args[i + 1].size();
-                char * key_name_chars = new char[arg_size_in_bytes + 1];
-                std::copy(func_with_args[i + 1].begin(), func_with_args[i + 1].end(), key_name_chars);
-                key_name_chars[arg_size_in_bytes] = '\0';
-                arg_values[index] = key_name_chars;
-                arg_values[index + 1] = shm_ptr;
-                static_cast<UserLibrary*>(user_lib)->add_arg_size(arg_size_in_bytes);
-                static_cast<UserLibrary*>(user_lib)->add_arg_size(shm_obj_size);
-              }
+              
             }
           }
-          else{
-            log->error("Function {} cannot parse the shared memory args", func_name);
-            update_status(thread_id, false);
-            continue;
+          
+          int exit_signal = name_func_map[func_name](user_lib, arg_size, arg_values);
+          if (exit_signal != 0){
+            std::cerr << "Function " << func_name << " exits with error " << exit_signal << std::endl;
+            log->warn("Function {} exits with error {}", func_name, exit_signal);
           }
-        }
+          static_cast<UserLibrary*>(user_lib)->clear_session();
+          helper->update_status(thread_id, false);
+          log->info("Executed {}", func_name);
         
-        auto recv_time = std::chrono::duration_cast<std::chrono::microseconds>(recv_stamp.time_since_epoch()).count();
-        auto parse_stamp = std::chrono::system_clock::now();
-        auto parse_time = std::chrono::duration_cast<std::chrono::microseconds>(parse_stamp.time_since_epoch()).count();
-
-        log->info("Executing {} arg_size: {}. recv: {}, parse: {}", func_name, arg_size, recv_time, parse_time);
-
-        int exit_signal = name_func_map[func_name](user_lib, arg_size, arg_values);
-        if (exit_signal != 0){
-          std::cerr << "Function " << func_name << " exits with error " << exit_signal << std::endl;
-          log->warn("Function {} exits with error {}", func_name, exit_signal);
         }
-        auto execute_stamp = std::chrono::system_clock::now();
-        static_cast<UserLibrary*>(user_lib)->clear_session();
-
-        update_status(thread_id, false);
-
-        auto execute_time = std::chrono::duration_cast<std::chrono::microseconds>(execute_stamp.time_since_epoch()).count();
-        log->info("Executed {} at: {}", func_name, execute_time);
-
       }
     }
     report_end = std::chrono::system_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(report_end - report_start).count();
+    
 
     if (duration >= ExecutorTimerThreshold) {
       report_start = std::chrono::system_clock::now();
-      update_status(thread_id, false);      
+      // send to coordinator
+      helper->update_status(thread_id, false);
       // log->info("Executer {} report.", thread_id);
     }
    
@@ -204,8 +152,6 @@ void run(Address ip, unsigned thread_id) {
 int main(int argc, char *argv[]) {
     auto exit = [](int) {
         is_quit__.store(true, std::memory_order_release);
-        shared_chan.disconnect();
-        local_chan->disconnect();
     };
     ::signal(SIGINT  , exit);
     ::signal(SIGABRT , exit);
@@ -231,10 +177,56 @@ int main(int argc, char *argv[]) {
       RecvWaitTm = 0;
     }
 
-    Address ip = conf["ip"].as<Address>();
-    unsigned thread_id = conf["thread_id"].as<unsigned>();
+    YAML::Node user = conf["user"];
+    Address ip = user["ip"].as<Address>();
+    unsigned thread_id = user["thread_id"].as<unsigned>();
 
-    run(ip, thread_id);
+    unsigned coordThreadCount = conf["threads"]["coord"].as<unsigned>();
+
+    vector<Address> coord_ips;
+    YAML::Node coord = user["coord"];
+    for (const YAML::Node &node : coord) {
+      coord_ips.push_back(node.as<Address>());
+    }
+
+    if (coord_ips.size() <= 0) {
+      std::cerr << "No coordinator found" << std::endl;
+      exit(1);
+    }
+
+    vector<HandlerThread> threads;
+    for (Address addr : coord_ips) {
+      for (unsigned i = 0; i < coordThreadCount; i++) {
+        threads.push_back(HandlerThread(addr, i));
+      }
+    }
+
+    vector<Address> kvs_routing_ips;
+    if (YAML::Node elb = user["routing-elb"]) {
+      kvs_routing_ips.push_back(elb.as<Address>());
+    }
+
+    vector<UserRoutingThread> kvs_routing_threads;
+    for (Address addr : kvs_routing_ips) {
+      for (unsigned i = 0; i < 1; i++) {
+        kvs_routing_threads.push_back(UserRoutingThread(addr, i));
+      }
+    }
+
+    kvs_clients.push_back(new KvsClient(kvs_routing_threads, ip, thread_id + 1, 30000));
+    CommHelper helper(threads, ip, thread_id, 30000);
+    string log_file = "log_executor_" + std::to_string(thread_id) + ".txt";
+    string log_name = "log_executor_" + std::to_string(thread_id);
+    auto log = spdlog::basic_logger_mt(log_name, log_file, true);
+    log->flush_on(spdlog::level::info);
+    
+    for (auto kvs_client : kvs_clients){
+      kvs_client->set_logger(log);
+    }
+
+    helper.set_logger(log);
+
+    run(&helper, ip, thread_id, log);
 }
 
 

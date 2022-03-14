@@ -22,11 +22,24 @@ scheduler:
     executor: 2
     coord:
       - 127.0.0.1
+    routing-elb: 127.0.0.1
 executor_0:
-  ip: 127.0.0.1
-  thread_id: 0
+  threads: 
+    coord: 1
   func_dir: /dev/shm/
+  user:
+    ip: 127.0.0.1
+    thread_id: 0
+    coord:
+      - 127.0.0.1
+    routing-elb: 127.0.0.1
 executor_1:
-  ip: 127.0.0.1
-  thread_id: 1
+  threads: 
+    coord: 1
   func_dir: /dev/shm/
+  user:
+    ip: 127.0.0.1
+    thread_id: 1
+    coord:
+      - 127.0.0.1
+    routing-elb: 127.0.0.1

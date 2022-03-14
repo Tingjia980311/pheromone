@@ -8,13 +8,10 @@
 #include "trigger.hpp"
 #include "operation.pb.h"
 #include "cpp_function.hpp"
+#include "comm_helper.hpp"
 
-using shm_chan_t = ipc::chan<ipc::relat::multi, ipc::relat::multi, ipc::trans::unicast>;
 
 constexpr char const kvs_name__  [] = "ipc-kvs";
-shm_chan_t shared_chan { kvs_name__, ipc::sender };
-
-shm_chan_t* local_chan;
 
 typedef int (*CppFunction)(UserLibraryInterface*, int, char**);
 
@@ -23,14 +20,8 @@ class EpheObjectImpl : public EpheObject {
     EpheObjectImpl(string bucket, string key, size_t size, bool create) {
       obj_name_ = bucket + kDelimiter  + key;
       size_ = size;
-      if (create) {
-        // shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_, ipc::shm::create);
-        shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_);
-      }
-      else{
-        shm_id_ = ipc::shm::acquire(obj_name_.c_str(), size_, ipc::shm::open);
-      }
-      value_ = ipc::shm::get_mem(shm_id_, nullptr);
+      shm_id_ = 0;
+      value_ = static_cast<void *> (new char[size_ + 1]);
       target_func_ = "";
     }
 
@@ -77,12 +68,13 @@ class EpheObjectImpl : public EpheObject {
 
 class UserLibrary : public UserLibraryInterface {
   public:
-    UserLibrary(string ip, unsigned thread_id) {
+    UserLibrary(string ip, unsigned thread_id, CommHelperInterface *helper) {
       ip_number_ = ip;
       ip_number_.erase(std::remove(ip_number_.begin(), ip_number_.end(), '.'), ip_number_.end());
       chan_id_ = static_cast<uint8_t>(thread_id + 1);
       rid_ = 0;
       object_id_ = 0;
+      helper_ = helper;
     }
 
     ~UserLibrary() {}
@@ -130,117 +122,50 @@ class UserLibrary : public UserLibraryInterface {
     }
 
     void send_object(EpheObject *data, bool output = false, bool to_anna = false) {
-      string req;
-      auto req_id = get_request_id();
-      req.push_back(chan_id_);
-
-      bool wait_res = false;
+      ExecutorPutMessage msg;
       if (output) {
-        if (to_anna) {
-          // write to remote data store
-          req.push_back(3);
-          wait_res = true;
-        }
-        else {
-          // directly response to client
-          req.push_back(4);
-        }
+        msg.set_option(4);
+      } else {
+        msg.set_option(2);
       }
-      else {
-        // ephemeral data
-        req.push_back(2);
-      }
-      
-      req.push_back(req_id);
-      req.push_back(resp_address_.empty() ? 1 : 2);
-      bool data_packing = data->get_size() <= msgDataPackingThreshold;
-      req.push_back(data_packing ? 1 : 2);
-      if (!resp_address_.empty()){
-        req += resp_address_ + "|";
-      }
-      req += function_ + "|" + static_cast<EpheObjectImpl*>(data)->target_func_ + "|"
-                        + static_cast<EpheObjectImpl*>(data)->obj_name_ + "|";
+      msg.set_request_id(std::to_string(get_request_id()));
+      msg.set_resp_address(resp_address_);
+      bool if_anna = (data->get_size() > 100);
+      msg.set_if_anna(if_anna);
+      msg.set_func_name(function_);
+      msg.set_tgt_function(static_cast<EpheObjectImpl*>(data)->target_func_);
+      msg.set_object_name(static_cast<EpheObjectImpl*>(data)->obj_name_);
+      if (if_anna){
+        msg.set_data(static_cast<EpheObjectImpl*>(data)->obj_name_);
+        // send put to anna
+        string rid = kvs_clients[0]->put_async(static_cast<EpheObjectImpl*>(data)->obj_name_, 
+                                              serialize(generate_timestamp(0), 
+                                              string{static_cast<char*>(data->get_value()), data->get_size()}), 
+                                              LatticeType::LWW);
+        // wait resp
+        while(1){
+          auto comm_resps = helper_->try_recv_msg();
+          int recv_resp_from_anna = 0;
+          for (auto &comm_resp : comm_resps) {
+            if (comm_resp.msg_type_ == RecvMsgType::KvsPutResp) {
+              recv_resp_from_anna = 1;
+            }
+          }
+          if (recv_resp_from_anna) break;
 
-      if (data_packing) {
-        req += string(static_cast<char*>(data->get_value()), data->get_size());
-      }
-      else {
-        req += std::to_string(data->get_size());
-      }
-      // while (!shared_chan.send(req)) {
-      //     shared_chan.wait_for_recv(1);
-      // }
-      
-      bool send_res = shared_chan.send(req);
-      if (!send_res) {
-        std::cerr << "Send to executer failed.";
+        }
+        
+      } else
+        msg.set_data(static_cast<char*>(data->get_value()), data->get_size());
+      string serialized;
+      msg.SerializeToString(&serialized);
+      send_request(msg, static_cast<CommHelper *> (helper_)->socket_cache_[static_cast<CommHelper *>(helper_)->routing_threads_[0].executor_put_connect_address()]);
 
-        if (!shared_chan.wait_for_recv(1)) {
-            std::cerr << "Wait receiver failed.\n";
-        }
-      }
-
-      if (send_res && wait_res) {
-        auto recv_dd = local_chan->recv(30000); // 30-second timeout
-        auto recv_str = static_cast<char*>(recv_dd.data());
-
-        if (recv_str == nullptr) {
-          std::cout << "Put error: timeout " << std::endl;
-        }
-        if (recv_str[0] != 3) {
-          std::cout << "Put error: incorrect message type " << (uint8_t) recv_str[0] << std::endl;
-        }
-        if (recv_str[1] != req_id) {
-          std::cout << "Put error: request id " << (uint8_t) recv_str[1] << " doesn't match " << req_id << std::endl;
-        }
-
-        if (recv_str[2] != 1) {
-          std::cout << "Put error: kvs error" << std::endl;
-        }
-      }
     }
 
     EpheObject* get_object(string bucket, string key, bool from_ephe_store=true) {
-      if (!from_ephe_store) {
-        bucket = kvsKeyPrefix;
-      }
-      string obj_name = bucket + kDelimiter + key;
-      string req;
-      auto req_id = get_request_id();
-      req.push_back(chan_id_);
-      req.push_back(1);
-      req.push_back(from_ephe_store ? 1 : 2);
-      req.push_back(req_id);
-      req.push_back(static_cast<uint8_t>(obj_name.size()));
-      req += obj_name;
-
-      while (!shared_chan.send(req)) {
-          shared_chan.wait_for_recv(1);
-      }
-
-      auto recv_dd = local_chan->recv(30000); // 30-second timeout
-      auto recv_str = static_cast<char*>(recv_dd.data());
-
-      if (recv_str == nullptr) {
-        std::cout << "Get error: timeout for " << obj_name << std::endl;
-        return nullptr;
-      }
-      if (recv_str[0] != 3) {
-        std::cout << "Get error: incorrect message type " << (uint8_t) recv_str[0] << std::endl;
-        return nullptr;
-      }
-      if (recv_str[1] != req_id) {
-        std::cout << "Get error: request id " << (uint8_t) recv_str[1] << " doesn't match " << req_id << std::endl;
-        return nullptr;
-      }
-
-      if (recv_str[2] != 1) {
-        std::cout << "Get error: kvs error" << std::endl;
-        return nullptr;
-      }
-
-      auto size_len = stoi(string(recv_str + 3));
-      return new EpheObjectImpl(bucket, key, size_len, false);
+      // TODO::
+      return new EpheObjectImpl("bucket", "key", 0, false);
     }
 
     string gen_unique_key(){
@@ -267,6 +192,7 @@ class UserLibrary : public UserLibraryInterface {
     string function_;
     string resp_address_;
     vector<size_t> size_of_args_;
+    CommHelperInterface *helper_;
 };
 
 #endif  // INCLUDE_EXECUTOR_FUNCTION_LIB_HPP_

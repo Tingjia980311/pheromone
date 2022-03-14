@@ -21,6 +21,7 @@ SET(COORDINATOR_SOURCE
     trigger_op_handler.cpp
     func_call_handler.cpp
     app_register_handler.cpp
+    executor_put_handler.cpp
 )
 
 ADD_EXECUTABLE(coordinator ${COORDINATOR_SOURCE})

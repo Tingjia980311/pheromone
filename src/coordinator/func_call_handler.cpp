@@ -2,9 +2,26 @@
 
 extern unsigned seed;
 extern unsigned io_thread_num;
+uint32_t schedule_func_call(map<uint32_t, uint32_t> &executor_status_map){
+  vector<uint32_t> avail_executors;
+  for (auto &executor_status : executor_status_map) {
+    if (executor_status.second == 1 || executor_status.second == 0){
+      // find an available warm node, just move forward
+      avail_executors.push_back(executor_status.first);
+    }
+  }
+
+  if (avail_executors.size() > 0){
+    auto executor_id = 0;
+    executor_id = avail_executors[rand_r(&seed) % avail_executors.size()];
+    return executor_id;
+  }
+  return -1;
+}
 
 void func_call_handler(logger log, string &serialized, SocketCache &pushers,
-                        map<Address, NodeStatus> &node_status_map){
+                        map<Address, NodeStatus> &node_status_map, 
+                        map<Address, map<uint32_t, uint32_t>> &executor_status_map){
   auto receive_req_stamp = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   FunctionCall call_msg;
@@ -21,18 +38,6 @@ void func_call_handler(logger log, string &serialized, SocketCache &pushers,
 
   string resp_address = call_msg.resp_address();
 
-  // string response_key = string();
-  // if (!resp_address.empty()) {
-  //   // synchronous requests
-  //   response_key = call_msg.response_key();
-  //   if (response_key.empty()){
-  //     response_key = gen_random(16); // a random id with 16 bytes
-  //     call_msg.set_response_key(response_key);
-  //     call_msg.SerializeToString(&serialized);
-  //   }
-  // }
-
-  // batch scheduling
   if (req_num > 1) {
     int total_executors = 0;
     vector<pair<Address, int>> avail_nodes;
@@ -133,7 +138,21 @@ void func_call_handler(logger log, string &serialized, SocketCache &pushers,
         std::chrono::system_clock::now().time_since_epoch()).count();
     for (auto &node_msg : scheduled_node_msg){
       string func_exec_addr = get_func_exec_address(node_msg.first, rand_r(&seed) % io_thread_num);
-      kZmqUtil->send_string(node_msg.second, &pushers[func_exec_addr]);
+      uint32_t executor_id = schedule_func_call(executor_status_map[node_msg.first] );
+      string executor_func_call_addr = get_executor_func_call_address(node_msg.first, executor_id);
+      // kZmqUtil->send_string(node_msg.second, &pushers[func_exec_addr]);
+      if (executor_id == -1) {
+        FunctionCallResponse resp;
+        resp.set_app_name(app_name);
+        resp.set_request_id(call_msg.request_id());
+        resp.set_error_no(1);
+
+        string resp_serialized;
+        resp.SerializeToString(&resp_serialized);
+        kZmqUtil->send_string(resp_serialized, &pushers[resp_address]);
+      }
+      kZmqUtil->send_string(node_msg.second, &pushers[executor_func_call_addr]);
+      executor_status_map[node_msg.first][executor_id] = 2;
     }
     std::cout << "App function call "<< app_name << ". recv: " << receive_req_stamp << ", scheduled: " << scheduled_stamp << std::endl;
     log->info("App function call {}. recv: {}, scheduled {}.", app_name, receive_req_stamp, scheduled_stamp);

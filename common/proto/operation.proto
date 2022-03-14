@@ -283,6 +283,23 @@ message UpdateStatusMessage {
   repeated string functions = 3;
 }
 
+message UpdateExecutorStatus {
+  string ip = 1;
+  uint32 thread_id = 2;
+  uint32 busy = 3;
+}
+
+message ExecutorPutMessage {
+  uint32 option = 1;
+  string request_id = 2;
+  string resp_address = 3;
+  string func_name = 4;
+  string tgt_function = 5;
+  string object_name = 6;
+  string data = 7;
+  uint32 if_anna = 8;
+}
+
 message TriggerEntity {
   string bucket_name = 1;
 

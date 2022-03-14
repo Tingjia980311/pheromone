@@ -1,13 +1,24 @@
 #include "coord_handlers.hpp"
 
 void app_register_handler(logger log, string &serialized, string &private_ip, unsigned &thread_id, SocketCache &pushers, 
-                        map<Bucket, ValueType> &bucket_type_map, 
+                        map<Bucket, ValueType>              &bucket_type_map, 
                         map<Bucket, vector<TriggerPointer>> &bucket_triggers_map,
-                        map<string, set<string>> &app_buckets_map,
-                        map<Bucket, string> &bucket_app_map,
-                        map<Address, NodeStatus> &node_status_map) {
+                        map<string, set<string>>            &app_buckets_map,
+                        map<Bucket, string>                 &bucket_app_map,
+                        map<Address, NodeStatus>            &node_status_map,
+                        map<string, AppInfo>                &app_info_map,
+                        map<string, string>                 &func_app_map) {
+
+  // app info map
+  // func app map
   AppRegistration appRegist;
   appRegist.ParseFromString(serialized);
+
+  string app_name = appRegist.app_name();
+  for (auto &func : appRegist.functions()){
+    app_info_map[app_name].functions_.insert(func);
+    func_app_map[func] = app_name;
+  }
 
   UpdateCoordMsg coord_msg;
   coord_msg.set_ip(private_ip);
@@ -24,6 +35,10 @@ void app_register_handler(logger log, string &serialized, string &private_ip, un
     if (dependency.type() == DependencyType::DIRECT){
       auto dep = coord_msg.add_dependencies();
       dep->CopyFrom(dependency);
+      auto src_func = dependency.src_functions(0);
+      for (int i = 0; i < dependency.tgt_functions_size(); i++) {
+        app_info_map[app_name].direct_deps_[src_func].insert(dependency.tgt_functions(i));
+      }
     }
     else{
       string tgt_function = dependency.tgt_functions(0);
@@ -34,6 +49,11 @@ void app_register_handler(logger log, string &serialized, string &private_ip, un
 
       TriggerEntity *entity = coord_msg.add_triggers();
       entity->set_bucket_name(bucket_name);
+
+      auto iter = bucket_triggers_map.find(bucket_name);
+      if ( iter != bucket_triggers_map.end()) {
+        bucket_triggers_map.erase(iter);
+      }
 
       if (dependency.type() == DependencyType::MANY_TO_ONE){
         set<Key> key_names;
@@ -48,6 +68,8 @@ void app_register_handler(logger log, string &serialized, string &private_ip, un
         entity->set_trigger_option(trigger_ptr->get_trigger_option());
         entity->set_primitive_type(PrimitiveType::BY_SET);
         entity->set_primitive(trigger_ptr->dump_pritimive());
+
+        app_info_map[app_name].buckets_.push_back(bucket_name);
       }
       else if (dependency.type() == DependencyType::K_OUT_OF_N){
         vector<string> metadata;
@@ -64,19 +86,18 @@ void app_register_handler(logger log, string &serialized, string &private_ip, un
         entity->set_trigger_option(trigger_ptr->get_trigger_option());
         entity->set_primitive_type(PrimitiveType::REDUNDANT);
         entity->set_primitive(trigger_ptr->dump_pritimive());
+
+        app_info_map[app_name].buckets_.push_back(bucket_name);
       }
       else if (dependency.type() == DependencyType::PERIODIC){
-        string tgt_function = dependency.tgt_functions(0);
-        string bucket_name = "b_" + tgt_function;
-        bucket_type_map[bucket_name] = ValueType::NORMAL;
-        app_buckets_map[appRegist.app_name()].insert(bucket_name);
-        bucket_app_map[bucket_name] = appRegist.app_name();
 
         int time_window = stoi(dependency.description());
 
         string trigger_name = "t_" + std::to_string(DependencyType::PERIODIC) + "_" + tgt_function;
         auto trigger_ptr = std::make_shared<ByTimeTrigger>(tgt_function, trigger_name, time_window);
         bucket_triggers_map[bucket_name].push_back(trigger_ptr);
+
+        app_info_map[app_name].buckets_.push_back(bucket_name);
       }
     }
   }

@@ -75,6 +75,14 @@ GetAddressResult get_address(
   return result;
 }
 
+inline int get_avail_executor_num(map<uint32_t, uint32_t> &executor_status_map){
+  int executors = 0;
+  for (auto &executor_status : executor_status_map) {
+    if (executor_status.second == 0 || executor_status.second == 1) executors++;
+  }
+  return executors;
+}
+
 void run(Address public_ip, Address private_ip, unsigned thread_id) {
   string log_file = "log_coordinator_" + std::to_string(thread_id) + ".txt";
   string log_name = "log_coordinator_" + std::to_string(thread_id);
@@ -106,6 +114,14 @@ void run(Address public_ip, Address private_ip, unsigned thread_id) {
   map<Bucket, string> bucket_app_map;
 
   map<Address, NodeStatus> node_status_map;
+  map<Address, map<uint32_t, uint32_t>> executor_status_map;
+
+  map<string, AppInfo> app_info_map;
+  map<string, string> func_app_map;
+  // map<string,
+
+  map<string, unsigned> key_len_map;
+  map<string, string> key_val_map;
 
   zmq::socket_t notify_handler_puller(context, ZMQ_PULL);
   notify_handler_puller.bind(ht.notify_handler_bind_address());
@@ -144,16 +160,26 @@ void run(Address public_ip, Address private_ip, unsigned thread_id) {
   forward_func_socket.bind(ht.forward_func_bind_address());
   std::cout << "forward func socket binded" << std::endl;
 
+  zmq::socket_t executor_update_socket(context, ZMQ_PULL);
+  executor_update_socket.bind(ht.executor_update_bind_address());
+  std::cout << "executor update socket binded" << std::endl;
+
+  zmq::socket_t executor_put_socket(context, ZMQ_PULL);
+  executor_put_socket.bind(ht.executor_put_bind_address());
+  std::cout << "executor put socket binded" << std::endl;
+
   vector<zmq::pollitem_t> pollitems = {
-    {static_cast<void *>(notify_handler_puller), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(query_handler_puller), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(bucket_op_handler_puller), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(trigger_op_handler_puller), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(update_handler_puller), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(func_create_socket), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(app_regist_socket), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(func_call_socket), 0, ZMQ_POLLIN, 0},
-    {static_cast<void *>(forward_func_socket), 0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(notify_handler_puller),      0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(query_handler_puller),       0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(bucket_op_handler_puller),   0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(trigger_op_handler_puller),  0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(update_handler_puller),      0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(func_create_socket),         0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(app_regist_socket),          0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(func_call_socket),           0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(forward_func_socket),        0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(executor_update_socket),     0, ZMQ_POLLIN, 0},
+    {static_cast<void *>(executor_put_socket),        0, ZMQ_POLLIN, 0},
   };
 
   // sync coord with management
@@ -237,21 +263,68 @@ void run(Address public_ip, Address private_ip, unsigned thread_id) {
     // handle app registration request
     if (pollitems[6].revents & ZMQ_POLLIN) {
       string serialized = kZmqUtil->recv_string(&app_regist_socket);
-      app_register_handler(log, serialized, private_ip, thread_id, pushers, bucket_type_map, bucket_triggers_map, app_buckets_map, bucket_app_map, node_status_map);
+      app_register_handler(log, serialized, private_ip, thread_id, pushers, 
+                           bucket_type_map, bucket_triggers_map, app_buckets_map, 
+                           bucket_app_map, node_status_map, app_info_map, func_app_map);
     }
     
     // handle function call
     if (pollitems[7].revents & ZMQ_POLLIN) {
       string serialized = kZmqUtil->recv_string(&func_call_socket);
-      func_call_handler(log, serialized, pushers, node_status_map);
+      func_call_handler(log, serialized, pushers, node_status_map, executor_status_map);
       call_count++;
     }
 
     // forward function call
     if (pollitems[8].revents & ZMQ_POLLIN) {
       string serialized = kZmqUtil->recv_string(&forward_func_socket);
-      func_call_handler(log, serialized, pushers, node_status_map);
+      func_call_handler(log, serialized, pushers, node_status_map, executor_status_map);
       call_count++;
+    }
+
+    if (pollitems[9].revents & ZMQ_POLLIN) {
+      string serialized = kZmqUtil->recv_string(&executor_update_socket);
+      UpdateExecutorStatus msg;
+      msg.ParseFromString(serialized);
+
+      string ip = msg.ip();
+      uint32_t thread_id = msg.thread_id();
+      uint32_t busy_flag = msg.busy();
+      if (busy_flag)
+        executor_status_map[ip][thread_id] = 3;
+      else if (executor_status_map[ip][thread_id] == 0 || executor_status_map[ip][thread_id] == 2)
+        executor_status_map[ip][thread_id] = 0;
+      else 
+        executor_status_map[ip][thread_id] = 1;
+
+      set<string> functions;
+      if (node_status_map.find(ip) != node_status_map.end()) {
+        node_status_map[ip].update_status(get_avail_executor_num(executor_status_map[ip]), functions);
+      }
+      else {
+        NodeStatus node_status;
+        node_status.avail_executors_ = get_avail_executor_num(executor_status_map[ip]);
+        node_status.functions_ = functions;
+        node_status.tp_ = std::chrono::system_clock::now();
+        node_status_map[ip] = node_status;
+      }
+      // for(map<Address, NodeStatus>::const_iterator it = node_status_map.begin(); it != node_status_map.end(); ++it){
+      //   log->info ("{},{}", it->first, it->second.avail_executors_);
+      // }
+      /**
+       * for(map<Address, map<uint32_t,uint32_t> >::const_iterator it = executor_status_map.begin(); it != executor_status_map.end(); ++it)
+       * {
+       *   log->info ("{} ", it->first);
+       *   for (map<uint32_t, uint32_t>::const_iterator it_ = it->second.begin(); it_ != it->second.end(); ++it_)
+       *     log->info ("{} {} ", it_->first, it_->second);
+       * }
+      **/
+
+    }
+
+    if (pollitems[10].revents & ZMQ_POLLIN) {
+      string serialized = kZmqUtil->recv_string(&executor_put_socket);
+      executor_put_handler(log, serialized, pushers, node_status_map, executor_status_map, app_info_map, key_val_map, key_len_map, func_app_map);
     }
 
     report_end = std::chrono::system_clock::now();

@@ -5,6 +5,10 @@
 
 const unsigned funcExecPort = 4300;
 
+const unsigned executorFuncCallPort = 8500;
+
+const unsigned executorPutHandlerPort = 8600;
+
 const unsigned internalFuncCallPort = 4350;
 
 const unsigned dataAccessServerPort = 4400;
@@ -28,6 +32,8 @@ const unsigned kQueryHandlerPort = 7400;
 const unsigned TriggerUpdatePort = 7700;
 
 const unsigned updateStatusHandlerPort = 7750;
+
+const unsigned executorUpdateHandlerPort = 7760;
 
 const unsigned bucketQueryPort = 8150;
 const unsigned bucketUpdatePort = 8250;
@@ -129,6 +135,14 @@ class HandlerThread {
   Address update_handler_bind_address() const { return kBindBase + std::to_string(tid_ + updateStatusHandlerPort); }
 
   Address update_handler_connect_address() const { return ip_base_ + std::to_string(tid_ + updateStatusHandlerPort); }
+
+  Address executor_update_bind_address() const { return kBindBase + std::to_string(tid_ + executorUpdateHandlerPort); }
+
+  Address executor_update_connect_address() const { return ip_base_ + std::to_string(tid_ + executorUpdateHandlerPort); }
+
+  Address executor_put_bind_address() const { return kBindBase + std::to_string(tid_ + executorPutHandlerPort); }
+
+  Address executor_put_connect_address() const { return ip_base_ + std::to_string(tid_ + executorPutHandlerPort); }
   
   Address forward_func_bind_address() const { return kBindBase + std::to_string(tid_ + forwardFuncPort); }
 

@@ -20,7 +20,7 @@ def generate_timestamp(tid=1):
     return int(t * p + tid)
 
 class PheromoneClient():
-    def __init__(self, mngt_ip, kvs_addr, ip, thread_id=0, context=None):
+    def __init__(self, mngt_ip, kvs_addr, ip, thread_id=0, context=None, local = False):
         if not context:
             self.context = zmq.Context(1)
         else:
@@ -31,7 +31,7 @@ class PheromoneClient():
         else:  # If the IP is not provided, we attempt to infer it.
             self.ort = OperationRequestThread(socket.gethostbyname(socket.gethostname()), thread_id)
 
-        self.kvs_client = AnnaTcpClient(kvs_addr, ip, local=False, offset=thread_id + 10)
+        self.kvs_client = AnnaTcpClient(kvs_addr, ip, local=local, offset=thread_id + 10)
 
         # currently the coordinator by default runs on thread 0
         self.mngt_socket = self.context.socket(zmq.REQ)
