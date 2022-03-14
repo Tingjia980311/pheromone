@@ -38,9 +38,9 @@ spec:
           value: executor
         - name: COORD_IPS
           value: COORD_IPS_DUMMY
-        -name: ROUTE_ADDR
+        - name: ROUTE_ADDR
           value: ROUTE_ADDR_DUMMY
-        -name: COORD_THREADS
+        - name: COORD_THREADS
           value: "1"
         volumeMounts:
         - name: cache-volume
@@ -59,9 +59,9 @@ spec:
           value: executor
         - name: COORD_IPS
           value: COORD_IPS_DUMMY
-        -name: ROUTE_ADDR
+        - name: ROUTE_ADDR
           value: ROUTE_ADDR_DUMMY
-        -name: COORD_THREADS
+        - name: COORD_THREADS
           value: "1"
         volumeMounts:
         - name: cache-volume
