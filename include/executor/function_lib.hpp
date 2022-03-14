@@ -130,7 +130,7 @@ class UserLibrary : public UserLibraryInterface {
       }
       msg.set_request_id(std::to_string(get_request_id()));
       msg.set_resp_address(resp_address_);
-      bool if_anna = (data->get_size() > 100);
+      bool if_anna = (data->get_size() > 100000001);
       msg.set_if_anna(if_anna);
       msg.set_func_name(function_);
       msg.set_tgt_function(static_cast<EpheObjectImpl*>(data)->target_func_);
